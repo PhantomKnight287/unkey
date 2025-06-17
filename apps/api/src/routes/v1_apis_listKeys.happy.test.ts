@@ -47,14 +47,12 @@ test("get api", async (t) => {
   expect(res.body.keys.length).toBeLessThanOrEqual(100); //  default page size
 });
 
-
-
-
 test("returns enabled", async (t) => {
   const h = await IntegrationHarness.init(t);
 
-
-  const keys = new Array(10).fill(0).map(() => ({ id:newId("test"), enabled: Math.random() >0.5}));
+  const keys = new Array(10)
+    .fill(0)
+    .map(() => ({ id: newId("test"), enabled: Math.random() > 0.5 }));
   for (let i = 0; i < keys.length; i++) {
     const key = new KeyV1({ prefix: "test", byteLength: 16 }).toString();
     await h.db.primary.insert(schema.keys).values({
@@ -85,17 +83,13 @@ test("returns enabled", async (t) => {
   expect(res.body.total).toBeGreaterThanOrEqual(keys.length);
   expect(res.body.keys.length).toBeGreaterThanOrEqual(keys.length);
   expect(res.body.keys.length).toBeLessThanOrEqual(100); //  default page size
-  
 
   for (const key of res.body.keys) {
-    const found = keys.find(k=>k.id === key.id)
-    expect(found).toBe(true)
-    expect(found!.enabled).toBe(key.enabled)
-
-
+    const found = keys.find((k) => k.id === key.id);
+    expect(found).toBe(true);
+    expect(found!.enabled).toBe(key.enabled);
   }
 });
-
 
 test("returns identity", async (t) => {
   const h = await IntegrationHarness.init(t);
