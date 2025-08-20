@@ -58,8 +58,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -134,8 +132,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -211,8 +207,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -292,8 +286,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -367,8 +359,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -442,8 +432,6 @@ func TestLoadConfig(t *testing.T) {
 				Network: NetworkConfig{
 					Enabled:              true,
 					EnableIPv4:           true,
-					BridgeIPv4:           "172.31.0.1/19",
-					VMSubnetIPv4:         "172.31.0.0/19",
 					DNSServersIPv4:       []string{"8.8.8.8", "8.8.4.4"},
 					EnableIPv6:           true,
 					BridgeIPv6:           "fd00::1/64",
@@ -816,8 +804,6 @@ func compareConfigs(a, b *Config) bool {
 	// Compare Network config
 	if a.Network.Enabled != b.Network.Enabled ||
 		a.Network.EnableIPv4 != b.Network.EnableIPv4 ||
-		a.Network.BridgeIPv4 != b.Network.BridgeIPv4 ||
-		a.Network.VMSubnetIPv4 != b.Network.VMSubnetIPv4 ||
 		!stringSlicesEqual(a.Network.DNSServersIPv4, b.Network.DNSServersIPv4) ||
 		a.Network.EnableIPv6 != b.Network.EnableIPv6 ||
 		a.Network.BridgeIPv6 != b.Network.BridgeIPv6 ||

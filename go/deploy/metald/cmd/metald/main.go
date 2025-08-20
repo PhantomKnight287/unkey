@@ -251,10 +251,12 @@ func main() {
 			slog.Int("bridge_count", cfg.Network.BridgeCount),
 			slog.String("primary_bridge", "br-tenant-0"))
 
+		// Multi-bridge architecture: br-tenant-0 uses 172.16.0.x/24
+		// All bridge IPs calculated dynamically by MultiBridgeManager
 		networkConfig := &network.Config{
 			BridgeName:      "br-tenant-0",
-			BridgeIP:        "172.16.0.1/24",
-			VMSubnet:        "172.16.0.0/24",
+			BridgeIP:        "172.16.0.1/24", // First bridge
+			VMSubnet:        "172.16.0.0/24", // First bridge subnet
 			EnableIPv6:      cfg.Network.EnableIPv6,
 			DNSServers:      cfg.Network.DNSServersIPv4,
 			EnableRateLimit: cfg.Network.EnableRateLimit,
@@ -296,7 +298,9 @@ func main() {
 		}
 
 		// Use SDK v4 with integrated jailer - the only supported backend
-		sdkClient, err := firecracker.NewSDKClientV4(logger, networkManager, assetClient, vmRepo, &cfg.Backend.Jailer, baseDir)
+		// AIDEV-NOTE: Re-enable with conservative approach (DNS only, no IP conflicts)
+		enableKernelNetworkConfig := true
+		sdkClient, err := firecracker.NewSDKClientV4(logger, networkManager, assetClient, vmRepo, &cfg.Backend.Jailer, baseDir, enableKernelNetworkConfig)
 		if err != nil {
 			logger.Error("failed to create SDK client v4 with integrated jailer",
 				slog.String("error", err.Error()),
@@ -323,7 +327,7 @@ func main() {
 	case types.BackendTypeDocker:
 		// AIDEV-NOTE: Docker backend for development - creates containers instead of VMs
 		logger.Info("initializing Docker backend for development")
-		
+
 		dockerClient, err := docker.NewDockerBackend(logger, docker.DefaultDockerBackendConfig())
 		if err != nil {
 			logger.Error("failed to create Docker backend",
@@ -331,7 +335,7 @@ func main() {
 			)
 			os.Exit(1)
 		}
-		
+
 		backend = dockerClient
 		logger.Info("Docker backend initialized successfully")
 	case types.BackendTypeCloudHypervisor:

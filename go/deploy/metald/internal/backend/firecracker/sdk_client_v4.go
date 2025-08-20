@@ -20,15 +20,17 @@ import (
 
 	sdk "github.com/firecracker-microvm/firecracker-go-sdk"
 	"github.com/firecracker-microvm/firecracker-go-sdk/client/models"
-	assetv1 "github.com/unkeyed/unkey/go/gen/proto/deploy/assetmanagerd/v1"
-	builderv1 "github.com/unkeyed/unkey/go/gen/proto/deploy/builderd/v1"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/assetmanager"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/backend/types"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/config"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/database"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/jailer"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/network"
+	assetv1 "github.com/unkeyed/unkey/go/gen/proto/deploy/assetmanagerd/v1"
+	builderv1 "github.com/unkeyed/unkey/go/gen/proto/deploy/builderd/v1"
 	metaldv1 "github.com/unkeyed/unkey/go/gen/proto/metal/vmprovisioner/v1"
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -58,21 +60,22 @@ type sdkV4VM struct {
 // The integrated jailer solves tap device permission issues and provides better
 // control over the isolation process.
 type SDKClientV4 struct {
-	logger          *slog.Logger
-	networkManager  *network.Manager
-	assetClient     assetmanager.Client
-	vmRepo          VMRepository // For port mapping persistence
-	vmRegistry      map[string]*sdkV4VM
-	vmAssetLeases   map[string][]string // VM ID -> asset lease IDs
-	jailer          *jailer.Jailer
-	jailerConfig    *config.JailerConfig
-	baseDir         string
-	tracer          trace.Tracer
-	meter           metric.Meter
-	vmCreateCounter metric.Int64Counter
-	vmDeleteCounter metric.Int64Counter
-	vmBootCounter   metric.Int64Counter
-	vmErrorCounter  metric.Int64Counter
+	logger                    *slog.Logger
+	networkManager            *network.Manager
+	assetClient               assetmanager.Client
+	vmRepo                    VMRepository // For port mapping persistence
+	vmRegistry                map[string]*sdkV4VM
+	vmAssetLeases             map[string][]string // VM ID -> asset lease IDs
+	jailer                    *jailer.Jailer
+	jailerConfig              *config.JailerConfig
+	baseDir                   string
+	tracer                    trace.Tracer
+	meter                     metric.Meter
+	vmCreateCounter           metric.Int64Counter
+	vmDeleteCounter           metric.Int64Counter
+	vmBootCounter             metric.Int64Counter
+	vmErrorCounter            metric.Int64Counter
+	enableKernelNetworkConfig bool // AIDEV-NOTE: Enable/disable advanced guest network configuration via kernel command line
 }
 
 // VMRepository defines the interface for VM database operations needed by the backend
@@ -82,7 +85,8 @@ type VMRepository interface {
 }
 
 // NewSDKClientV4 creates a new SDK-based Firecracker backend client with integrated jailer
-func NewSDKClientV4(logger *slog.Logger, networkManager *network.Manager, assetClient assetmanager.Client, vmRepo VMRepository, jailerConfig *config.JailerConfig, baseDir string) (*SDKClientV4, error) {
+// AIDEV-NOTE: Added enableKernelNetworkConfig parameter to control advanced guest network configuration
+func NewSDKClientV4(logger *slog.Logger, networkManager *network.Manager, assetClient assetmanager.Client, vmRepo VMRepository, jailerConfig *config.JailerConfig, baseDir string, enableKernelNetworkConfig bool) (*SDKClientV4, error) {
 	tracer := otel.Tracer("metald.firecracker.sdk.v4")
 	meter := otel.Meter("metald.firecracker.sdk.v4")
 
@@ -122,21 +126,22 @@ func NewSDKClientV4(logger *slog.Logger, networkManager *network.Manager, assetC
 	integratedJailer := jailer.NewJailer(logger, jailerConfig)
 
 	return &SDKClientV4{
-		logger:          logger.With("backend", "firecracker-sdk-v4"),
-		networkManager:  networkManager,
-		assetClient:     assetClient,
-		vmRepo:          vmRepo,
-		vmRegistry:      make(map[string]*sdkV4VM),
-		vmAssetLeases:   make(map[string][]string),
-		jailer:          integratedJailer,
-		jailerConfig:    jailerConfig,
-		baseDir:         baseDir,
-		tracer:          tracer,
-		meter:           meter,
-		vmCreateCounter: vmCreateCounter,
-		vmDeleteCounter: vmDeleteCounter,
-		vmBootCounter:   vmBootCounter,
-		vmErrorCounter:  vmErrorCounter,
+		logger:                    logger.With("backend", "firecracker-sdk-v4"),
+		networkManager:            networkManager,
+		assetClient:               assetClient,
+		vmRepo:                    vmRepo,
+		vmRegistry:                make(map[string]*sdkV4VM),
+		vmAssetLeases:             make(map[string][]string),
+		jailer:                    integratedJailer,
+		jailerConfig:              jailerConfig,
+		baseDir:                   baseDir,
+		tracer:                    tracer,
+		meter:                     meter,
+		vmCreateCounter:           vmCreateCounter,
+		vmDeleteCounter:           vmDeleteCounter,
+		vmBootCounter:             vmBootCounter,
+		vmErrorCounter:            vmErrorCounter,
+		enableKernelNetworkConfig: enableKernelNetworkConfig,
 	}, nil
 }
 
@@ -533,10 +538,9 @@ func (c *SDKClientV4) BootVM(ctx context.Context, vmID string) error {
 	fcConfig := c.buildFirecrackerConfig(ctx, vmID, vm.Config, vm.NetworkInfo, vm.AssetPaths)
 	fcConfig.SocketPath = socketPath
 
-	// Update kernel args with metadata if available
-	if metadata != nil {
-		fcConfig.KernelArgs = c.buildKernelArgsWithMetadata(ctx, fcConfig.KernelArgs, metadata)
-	}
+	// Update kernel args with network configuration and metadata if available
+	// AIDEV-NOTE: Use comprehensive kernel args builder that supports both network and container metadata
+	fcConfig.KernelArgs = c.buildKernelArgsWithNetworkAndMetadata(ctx, fcConfig.KernelArgs, vm.NetworkInfo, metadata)
 
 	// Create a context for this VM
 	vmCtx, cancel := context.WithCancel(context.Background())
@@ -1922,9 +1926,6 @@ func (c *SDKClientV4) Shutdown(ctx context.Context) error {
 
 	c.logger.InfoContext(ctx, "shutting down SDK v4 backend")
 
-	// Shutdown all running VMs
-	for vmID, vm := range c.vmRegistry {
-		c.logger.InfoContext(ctx, "shutting down VM during backend shutdown",
 	// AIDEV-BUSINESS_RULE: Preserve ALL VMs across metald restarts
 	// VMs should persist like any other virtualization platform (VMware, VirtualBox, etc.)
 	vmCount := len(c.vmRegistry)
@@ -2157,6 +2158,129 @@ func (c *SDKClientV4) buildKernelArgsWithMetadata(ctx context.Context, baseArgs 
 
 	// No metadata or init already specified, return base args
 	return baseArgs
+}
+
+// buildNetworkKernelArgs builds kernel command line arguments for network configuration
+// AIDEV-NOTE: Implements advanced guest network configuration using kernel parameters
+// as described in https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md#advanced-guest-network-configuration-using-kernel-command-line
+func (c *SDKClientV4) buildNetworkKernelArgs(ctx context.Context, networkInfo *network.VMNetwork) []string {
+	if networkInfo == nil {
+		return nil
+	}
+
+	var networkArgs []string
+
+	// Primary IP configuration using the ip= kernel parameter
+	// AIDEV-NOTE: This is REQUIRED for guest OS to configure its interface
+	// The bridge handles host-side routing, but guest needs IP parameters to configure eth0
+	ipArg := networkInfo.KernelCmdlineArgs()
+	if ipArg != "" {
+		networkArgs = append(networkArgs, ipArg)
+	}
+
+	// Add DNS nameservers if available
+	if len(networkInfo.DNSServers) > 0 {
+		// Primary nameserver
+		networkArgs = append(networkArgs, fmt.Sprintf("nameserver=%s", networkInfo.DNSServers[0]))
+
+		// Secondary nameserver if available
+		if len(networkInfo.DNSServers) > 1 {
+			networkArgs = append(networkArgs, fmt.Sprintf("nameserver1=%s", networkInfo.DNSServers[1]))
+		}
+	}
+
+	// Add route configuration for any custom routes
+	for i, route := range networkInfo.Routes {
+		if route.Destination != nil && route.Gateway != nil {
+			routeArg := fmt.Sprintf("route=%s,%s,%d",
+				route.Destination.String(),
+				route.Gateway.String(),
+				route.Metric,
+			)
+			networkArgs = append(networkArgs, routeArg)
+
+			// Limit to prevent kernel command line overflow
+			if i >= 5 {
+				c.logger.WarnContext(ctx, "limiting routes to prevent kernel cmdline overflow",
+					slog.Int("total_routes", len(networkInfo.Routes)),
+					slog.Int("max_routes", 5),
+				)
+				break
+			}
+		}
+	}
+
+	// Add IPv6 configuration if available
+	if networkInfo.IPv6Address != nil && !networkInfo.IPv6Address.IsUnspecified() {
+		networkArgs = append(networkArgs, fmt.Sprintf("ipv6=%s", networkInfo.IPv6Address.String()))
+	}
+
+	// Add VLAN configuration if specified
+	if networkInfo.VLANID > 0 {
+		networkArgs = append(networkArgs, fmt.Sprintf("vlan=%d", networkInfo.VLANID))
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelDebug, "built network kernel arguments",
+		slog.String("vm_id", networkInfo.VMID),
+		slog.String("ip", networkInfo.IPAddress.String()),
+		slog.String("gateway", networkInfo.Gateway.String()),
+		slog.Int("dns_servers", len(networkInfo.DNSServers)),
+		slog.Int("routes", len(networkInfo.Routes)),
+		slog.Int("network_args_count", len(networkArgs)),
+	)
+
+	return networkArgs
+}
+
+// buildKernelArgsWithNetworkAndMetadata builds kernel arguments incorporating both network configuration and container metadata
+// AIDEV-NOTE: This is the main function for building comprehensive kernel args that supports both
+// advanced network configuration and container metadata
+func (c *SDKClientV4) buildKernelArgsWithNetworkAndMetadata(ctx context.Context, baseArgs string, networkInfo *network.VMNetwork, metadata *builderv1.ImageMetadata) string {
+	// Start with base args from buildKernelArgsWithMetadata
+	args := c.buildKernelArgsWithMetadata(ctx, baseArgs, metadata)
+
+	// Add network configuration if enabled and available
+	if c.enableKernelNetworkConfig {
+		networkArgs := c.buildNetworkKernelArgs(ctx, networkInfo)
+		if len(networkArgs) > 0 {
+			// Parse existing args to avoid duplicates and check for conflicts
+			existingArgs := strings.Fields(args)
+			var finalArgs []string
+
+			// Keep existing args, but remove any conflicting network parameters
+			for _, arg := range existingArgs {
+				// Skip existing network parameters that will be replaced
+				if !strings.HasPrefix(arg, "ip=") &&
+					!strings.HasPrefix(arg, "nameserver=") &&
+					!strings.HasPrefix(arg, "route=") &&
+					!strings.HasPrefix(arg, "ipv6=") &&
+					!strings.HasPrefix(arg, "vlan=") {
+					finalArgs = append(finalArgs, arg)
+				}
+			}
+
+			// Add network arguments
+			finalArgs = append(finalArgs, networkArgs...)
+
+			args = strings.Join(finalArgs, " ")
+
+			c.logger.LogAttrs(ctx, slog.LevelInfo, "built comprehensive kernel args with network and metadata",
+				slog.String("vm_id", networkInfo.VMID),
+				slog.Int("total_network_args", len(networkArgs)),
+				slog.String("final_args", args),
+			)
+		}
+	} else {
+		vmID := "unknown"
+		if networkInfo != nil {
+			vmID = networkInfo.VMID
+		}
+		c.logger.LogAttrs(ctx, slog.LevelDebug, "kernel-based network configuration disabled",
+			slog.String("vm_id", vmID),
+		)
+	}
+
+	return args
 }
 
 // parseExposedPorts parses exposed ports from container metadata and allocates host ports

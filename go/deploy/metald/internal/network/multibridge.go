@@ -82,6 +82,13 @@ func NewMultiBridgeManager(bridgeCount int, bridgePrefix string, logger *slog.Lo
 			slog.String("state_path", statePath),
 			slog.Int("workspace_count", len(mbm.workspaces)),
 		)
+
+		// Validate and repair state after loading
+		if repaired := mbm.validateAndRepairState(); repaired {
+			mbm.logger.Info("state validation completed with repairs applied")
+		} else {
+			mbm.logger.Debug("state validation completed, no repairs needed")
+		}
 	}
 
 	return mbm
@@ -378,6 +385,11 @@ func (mbm *MultiBridgeManager) AllocateIPForWorkspace(workspaceID string) (net.I
 		mbm.bridgeUsage[bridgeNumber][workspaceID] = true
 	}
 
+	// Validate bridge allocation before proceeding
+	if err := mbm.validateBridgeAllocation(allocation); err != nil {
+		return nil, "", fmt.Errorf("bridge allocation validation failed: %w", err)
+	}
+
 	// For now, allocate directly from bridge subnet (not project-specific VLAN)
 	// TODO: Add project_id parameter for project-specific VLAN allocation
 	bridgeSubnet := fmt.Sprintf("172.16.%d.0/24", allocation.BridgeNumber)
@@ -386,24 +398,31 @@ func (mbm *MultiBridgeManager) AllocateIPForWorkspace(workspaceID string) (net.I
 		return nil, "", fmt.Errorf("invalid bridge subnet %s: %w", bridgeSubnet, err)
 	}
 
-	// Workspace-based /28 subnet allocation for multi-VM support
-	// AIDEV-NOTE: Each workspace gets a /28 subnet (16 IPs) for up to 14 VMs
-	// A bridge's /24 space (256 IPs) can hold 16 workspaces × 16 IPs each
-	// Workspace subnets: .0/28, .16/28, .32/28, .48/28, etc.
-	// Within each /28: .1=reserved, .2-.15=VMs (14 usable IPs)
+	// Workspace-based /29 subnet allocation for multi-VM support
+	// AIDEV-NOTE: Each workspace gets a /29 subnet (8 IPs) for up to 5 VMs
+	// A bridge's /24 space (256 IPs) can hold 32 workspaces × 8 IPs each
+	// Workspace subnets: .0/29, .8/29, .16/29, .24/29, etc.
+	// Within each /29: .0=network, .1=gateway, .2-.6=VMs (5 usable IPs), .7=broadcast
 
-	// Use deterministic hash to assign /28 subnet to workspace
+	// Use deterministic hash to assign /29 subnet to workspace
 	hash := fnv.New32a()
 	hash.Write([]byte(workspaceID))
-	workspaceSubnetIndex := int(hash.Sum32() % 16)   // 0-15 (16 possible /28 subnets per bridge)
-	workspaceSubnetBase := workspaceSubnetIndex * 16 // 0, 16, 32, 48, 64, etc.
+	workspaceSubnetIndex := int(hash.Sum32() % 32)  // 0-31 (32 possible /29 subnets per bridge)
+	workspaceSubnetBase := workspaceSubnetIndex * 8 // 0, 8, 16, 24, 32, etc.
 
 	vmIP := workspaceSubnetBase + 2 + allocation.VMCount // Start from .2, .3, .4, etc. (.1 reserved)
-	allocation.VMCount++                                 // Increment for next allocation
 
-	if vmIP > 254 {
-		return nil, "", fmt.Errorf("workspace %s bridge subnet is full", workspaceID)
+	// Check if workspace /29 subnet is full (max 5 VMs: .2, .3, .4, .5, .6)
+	if allocation.VMCount >= 5 {
+		return nil, "", fmt.Errorf("workspace %s /29 subnet is full (5/5 VMs)", workspaceID)
 	}
+
+	// Validate VM IP allocation before proceeding
+	if err := mbm.validateVMIPAllocation(workspaceID, workspaceSubnetBase, vmIP, allocation.VMCount); err != nil {
+		return nil, "", fmt.Errorf("VM IP allocation validation failed: %w", err)
+	}
+
+	allocation.VMCount++ // Increment for next allocation
 
 	// Calculate IP address
 	ip := make(net.IP, len(network.IP))
@@ -414,6 +433,11 @@ func (mbm *MultiBridgeManager) AllocateIPForWorkspace(workspaceID string) (net.I
 	if !network.Contains(ip) {
 		return nil, "", fmt.Errorf("calculated IP %s is outside bridge subnet %s",
 			ip.String(), bridgeSubnet)
+	}
+
+	// Final validation: ensure IP is within workspace /29 subnet
+	if err := mbm.validateIPWithinWorkspaceSubnet(ip, allocation.BridgeNumber, workspaceSubnetBase); err != nil {
+		return nil, "", fmt.Errorf("IP subnet validation failed: %w", err)
 	}
 
 	// Log successful IP allocation
@@ -814,4 +838,209 @@ func (mbm *MultiBridgeManager) verifyStateChecksum(state *MultiBridgeState) erro
 	)
 
 	return nil
+}
+
+// validateBridgeAllocation validates that bridge allocation parameters are correct
+func (mbm *MultiBridgeManager) validateBridgeAllocation(allocation *WorkspaceAllocation) error {
+	// Validate bridge number is within bounds
+	if allocation.BridgeNumber < 0 || allocation.BridgeNumber >= mbm.bridgeCount {
+		return fmt.Errorf("bridge number %d is out of range (0-%d)",
+			allocation.BridgeNumber, mbm.bridgeCount-1)
+	}
+
+	// Validate workspace ID is not empty
+	if allocation.WorkspaceID == "" {
+		return fmt.Errorf("workspace ID cannot be empty")
+	}
+
+	// Validate VM count is reasonable
+	if allocation.VMCount < 0 {
+		return fmt.Errorf("VM count cannot be negative: %d", allocation.VMCount)
+	}
+
+	if allocation.VMCount >= 5 {
+		return fmt.Errorf("VM count %d exceeds workspace /29 capacity (5 VMs max)", allocation.VMCount)
+	}
+
+	// Validate bridge name format
+	expectedBridgeName := fmt.Sprintf("%s-%d", mbm.bridgePrefix, allocation.BridgeNumber)
+	if allocation.BridgeName != expectedBridgeName {
+		return fmt.Errorf("bridge name mismatch: expected %s, got %s",
+			expectedBridgeName, allocation.BridgeName)
+	}
+
+	return nil
+}
+
+// validateVMIPAllocation validates VM IP allocation parameters
+func (mbm *MultiBridgeManager) validateVMIPAllocation(workspaceID string, workspaceSubnetBase, vmIP, vmCount int) error {
+	// Validate workspace subnet base is correctly aligned to /29 boundaries
+	if workspaceSubnetBase%8 != 0 {
+		return fmt.Errorf("workspace subnet base %d is not aligned to /29 boundary (must be multiple of 8)",
+			workspaceSubnetBase)
+	}
+
+	// Validate workspace subnet base is within bridge /24 range
+	if workspaceSubnetBase < 0 || workspaceSubnetBase > 248 {
+		return fmt.Errorf("workspace subnet base %d is out of bridge /24 range (0-248)", workspaceSubnetBase)
+	}
+
+	// Validate VM IP is within workspace /29 subnet
+	expectedVMIPMin := workspaceSubnetBase + 2 // .2 is first usable IP
+	expectedVMIPMax := workspaceSubnetBase + 6 // .6 is last usable IP
+	if vmIP < expectedVMIPMin || vmIP > expectedVMIPMax {
+		return fmt.Errorf("VM IP %d is outside workspace /29 range (%d-%d)",
+			vmIP, expectedVMIPMin, expectedVMIPMax)
+	}
+
+	// Validate VM IP matches expected calculation
+	expectedVMIP := workspaceSubnetBase + 2 + vmCount
+	if vmIP != expectedVMIP {
+		return fmt.Errorf("VM IP %d does not match expected calculation %d (base=%d + 2 + vmCount=%d)",
+			vmIP, expectedVMIP, workspaceSubnetBase, vmCount)
+	}
+
+	// Validate VM count consistency
+	if vmCount < 0 || vmCount >= 5 {
+		return fmt.Errorf("VM count %d is invalid (must be 0-4)", vmCount)
+	}
+
+	return nil
+}
+
+// validateIPWithinWorkspaceSubnet validates that IP is within correct workspace /29 subnet
+func (mbm *MultiBridgeManager) validateIPWithinWorkspaceSubnet(ip net.IP, bridgeNumber, workspaceSubnetBase int) error {
+	// Construct expected workspace /29 subnet
+	workspaceSubnet := fmt.Sprintf("172.16.%d.%d/29", bridgeNumber, workspaceSubnetBase)
+	_, workspaceNet, err := net.ParseCIDR(workspaceSubnet)
+	if err != nil {
+		return fmt.Errorf("failed to parse workspace subnet %s: %w", workspaceSubnet, err)
+	}
+
+	// Verify IP is within workspace subnet
+	if !workspaceNet.Contains(ip) {
+		return fmt.Errorf("IP %s is not within workspace subnet %s", ip.String(), workspaceSubnet)
+	}
+
+	// Calculate usable IP range within /29 subnet using stdlib
+	// For a /29 subnet, we have 8 IPs total: .0-.7
+	// Network: .0, Gateway: .1, Usable: .2-.6, Broadcast: .7
+	networkIP := workspaceNet.IP.To4()
+	if networkIP == nil {
+		return fmt.Errorf("invalid IPv4 network IP")
+	}
+
+	// Calculate first and last usable IPs
+	firstUsable := make(net.IP, 4)
+	copy(firstUsable, networkIP)
+	firstUsable[3] += 2 // .2 is first usable
+
+	lastUsable := make(net.IP, 4)
+	copy(lastUsable, networkIP)
+	lastUsable[3] += 6 // .6 is last usable
+
+	// Check if IP is in usable range
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return fmt.Errorf("IP %s is not IPv4", ip.String())
+	}
+
+	if ipv4[3] < firstUsable[3] || ipv4[3] > lastUsable[3] {
+		return fmt.Errorf("IP %s is not in usable range %s-%s within workspace subnet %s",
+			ip.String(), firstUsable.String(), lastUsable.String(), workspaceSubnet)
+	}
+
+	return nil
+}
+
+// validateAndRepairState validates loaded state and repairs any inconsistencies
+// Returns true if repairs were made, false if state was already valid
+func (mbm *MultiBridgeManager) validateAndRepairState() bool {
+	var repaired bool
+	var repairedWorkspaces []string
+
+	for workspaceID, allocation := range mbm.workspaces {
+		originalVMCount := allocation.VMCount
+
+		// Validate bridge number is within bounds
+		if allocation.BridgeNumber < 0 || allocation.BridgeNumber >= mbm.bridgeCount {
+			mbm.logger.Warn("invalid bridge number in state, resetting workspace",
+				slog.String("workspace_id", workspaceID),
+				slog.Int("invalid_bridge", allocation.BridgeNumber),
+				slog.Int("max_bridges", mbm.bridgeCount-1),
+			)
+			delete(mbm.workspaces, workspaceID)
+			repaired = true
+			repairedWorkspaces = append(repairedWorkspaces, workspaceID+" (deleted)")
+			continue
+		}
+
+		// Validate and repair VM count - enforce /29 subnet limit (5 VMs max)
+		if allocation.VMCount > 5 {
+			mbm.logger.Warn("workspace VM count exceeds /29 capacity, resetting to 0",
+				slog.String("workspace_id", workspaceID),
+				slog.Int("invalid_vm_count", allocation.VMCount),
+				slog.Int("max_vm_count", 5),
+			)
+			allocation.VMCount = 0
+			repaired = true
+			repairedWorkspaces = append(repairedWorkspaces,
+				fmt.Sprintf("%s (vm_count: %d->0)", workspaceID, originalVMCount))
+		}
+
+		// Validate bridge name format
+		expectedBridgeName := fmt.Sprintf("%s-%d", mbm.bridgePrefix, allocation.BridgeNumber)
+		if allocation.BridgeName != expectedBridgeName {
+			mbm.logger.Warn("invalid bridge name in state, correcting",
+				slog.String("workspace_id", workspaceID),
+				slog.String("invalid_name", allocation.BridgeName),
+				slog.String("expected_name", expectedBridgeName),
+			)
+			allocation.BridgeName = expectedBridgeName
+			repaired = true
+		}
+
+		// Ensure bridge usage tracking is consistent
+		if mbm.bridgeUsage[allocation.BridgeNumber] == nil {
+			mbm.bridgeUsage[allocation.BridgeNumber] = make(map[string]bool)
+		}
+		mbm.bridgeUsage[allocation.BridgeNumber][workspaceID] = true
+	}
+
+	// Clean up orphaned bridge usage entries
+	for bridgeNum, workspaceMap := range mbm.bridgeUsage {
+		for workspaceID := range workspaceMap {
+			if _, exists := mbm.workspaces[workspaceID]; !exists {
+				delete(workspaceMap, workspaceID)
+				repaired = true
+				mbm.logger.Warn("removed orphaned bridge usage entry",
+					slog.String("workspace_id", workspaceID),
+					slog.Int("bridge_number", bridgeNum),
+				)
+			}
+		}
+		// Clean up empty bridge usage maps
+		if len(workspaceMap) == 0 {
+			delete(mbm.bridgeUsage, bridgeNum)
+		}
+	}
+
+	// Persist repaired state
+	if repaired {
+		mbm.logger.Info("state validation found issues, applying repairs",
+			slog.Int("repaired_workspace_count", len(repairedWorkspaces)),
+			slog.Any("repaired_workspaces", repairedWorkspaces),
+		)
+
+		if err := mbm.saveState(); err != nil {
+			mbm.logger.Error("failed to persist state repairs",
+				slog.String("error", err.Error()),
+			)
+			// Don't return false - repairs were still applied in memory
+		} else {
+			mbm.logger.Info("state repairs persisted successfully")
+		}
+	}
+
+	return repaired
 }

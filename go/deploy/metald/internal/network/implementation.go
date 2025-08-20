@@ -326,14 +326,6 @@ func VerifyBridge(logger *slog.Logger, netConfig *Config, mainConfig *config.Net
 	return nil
 }
 
-// InitializeBridge creates bridge infrastructure during startup (DEPRECATED)
-// This function is kept for backward compatibility but should not be used
-// Use VerifyBridge instead - bridge should be managed by metald-bridge.service
-func InitializeBridge(logger *slog.Logger, netConfig *Config, mainConfig *config.NetworkConfig) error {
-	logger.Warn("InitializeBridge is deprecated - bridge should be managed by metald-bridge.service")
-	return VerifyBridge(logger, netConfig, mainConfig)
-}
-
 // attachVMToBridge attaches a VM interface to the specified bridge
 func (m *Manager) attachVMToBridge(bridgeName, interfaceName string) error {
 	// Get bridge and VM interface
@@ -956,7 +948,7 @@ func (m *Manager) CreateVMNetworkWithNamespace(ctx context.Context, vmID, nsName
 		Namespace:   actualNsName,
 		TapDevice:   deviceNames.TAP,
 		IPAddress:   ip,
-		Netmask:     subnet.Mask, // Use bridge subnet mask
+		Netmask:     net.CIDRMask(29, 32), // Use /29 to match actual veth configuration
 		Gateway:     gateway,
 		MacAddress:  mac,
 		DNSServers:  m.config.DNSServers,

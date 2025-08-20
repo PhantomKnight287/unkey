@@ -137,8 +137,6 @@ type NetworkConfig struct {
 
 	// IPv4 Configuration
 	EnableIPv4     bool
-	BridgeIPv4     string
-	VMSubnetIPv4   string
 	DNSServersIPv4 []string
 
 	// IPv6 Configuration
@@ -349,8 +347,6 @@ func LoadConfigWithSocketPathAndLogger(socketPath string, logger *slog.Logger) (
 		Network: NetworkConfig{
 			Enabled:         getEnvBoolOrDefault("UNKEY_METALD_NETWORK_ENABLED"),
 			EnableIPv4:      getEnvBoolOrDefault("UNKEY_METALD_NETWORK_IPV4_ENABLED"),
-			BridgeIPv4:      getEnvOrDefault("UNKEY_METALD_NETWORK_BRIDGE_IPV4", "172.31.0.1/19"),
-			VMSubnetIPv4:    getEnvOrDefault("UNKEY_METALD_NETWORK_VM_SUBNET_IPV4", "172.31.0.0/19"),
 			DNSServersIPv4:  strings.Split(getEnvOrDefault("UNKEY_METALD_NETWORK_DNS_IPV4", "8.8.8.8,8.8.4.4"), ","),
 			EnableIPv6:      getEnvBoolOrDefault("UNKEY_METALD_NETWORK_IPV6_ENABLED"),
 			BridgeIPv6:      getEnvOrDefault("UNKEY_METALD_NETWORK_BRIDGE_IPV6", "fd00::1/64"),
