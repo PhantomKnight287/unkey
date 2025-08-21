@@ -2290,18 +2290,34 @@ func (c *SDKClientV4) parseExposedPorts(ctx context.Context, vmID string, metada
 		return nil, nil
 	}
 
-	// Use network manager to allocate ports
-	mappings, err := c.networkManager.AllocatePortsForVM(vmID, metadata.GetExposedPorts())
+	// Get VM network info to find the IP address
+	vmNet, err := c.networkManager.GetVMNetwork(vmID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get VM network info for port allocation",
+			slog.String("vm_id", vmID),
+			slog.String("error", err.Error()),
+		)
+		return nil, fmt.Errorf("failed to get VM network info for %s: %w", vmID, err)
+	}
+
+	if vmNet == nil {
+		return nil, fmt.Errorf("VM network not found for %s", vmID)
+	}
+
+	// Use network manager to allocate ports with VM IP for DNAT rules
+	mappings, err := c.networkManager.AllocatePortsForVM(vmID, vmNet.IPAddress, metadata.GetExposedPorts())
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to allocate ports for VM",
 			slog.String("vm_id", vmID),
+			slog.String("vm_ip", vmNet.IPAddress.String()),
 			slog.String("error", err.Error()),
 		)
 		return nil, fmt.Errorf("failed to allocate ports for VM %s: %w", vmID, err)
 	}
 
-	c.logger.InfoContext(ctx, "allocated ports for VM",
+	c.logger.InfoContext(ctx, "allocated ports for VM with forwarding rules",
 		slog.String("vm_id", vmID),
+		slog.String("vm_ip", vmNet.IPAddress.String()),
 		slog.Int("port_count", len(mappings)),
 	)
 

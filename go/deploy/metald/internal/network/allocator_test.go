@@ -65,7 +65,7 @@ func TestIPAllocatorResourceCleanup(t *testing.T) {
 			continue
 		}
 		if !assignedIP.Equal(allocatedIPs[i]) {
-			t.Errorf("VM %s has wrong IP: got %s, expected %s", 
+			t.Errorf("VM %s has wrong IP: got %s, expected %s",
 				vmID, assignedIP.String(), allocatedIPs[i].String())
 		}
 	}
@@ -106,37 +106,37 @@ func TestIPAllocatorEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to parse subnet: %v", err)
 		}
 		allocator := NewIPAllocator(subnet)
-		
+
 		// Allocate IP
 		ip, err := allocator.AllocateIP()
 		if err != nil {
 			t.Fatalf("Failed to allocate IP: %v", err)
 		}
-		
+
 		// Release once (should succeed)
 		allocator.ReleaseIP(ip)
-		
+
 		// Release again (should handle gracefully)
 		allocator.ReleaseIP(ip) // This might be a no-op, which is fine
-		
+
 		// Verify clean state
 		if count := allocator.GetAllocatedCount(); count != 0 {
 			t.Errorf("Expected 0 allocations after cleanup, got %d", count)
 		}
-		
+
 		t.Logf("IP %s allocated and cleaned up successfully", ip.String())
 	})
 
 	t.Run("MultipleAllocationCleanup", func(t *testing.T) {
-		// Test allocation and cleanup of multiple IPs  
+		// Test allocation and cleanup of multiple IPs
 		_, subnet, err := net.ParseCIDR("192.168.250.0/24") // 254 usable IPs
 		if err != nil {
 			t.Fatalf("Failed to parse subnet: %v", err)
 		}
 		allocator := NewIPAllocator(subnet)
-		
+
 		var allocatedIPs []net.IP
-		
+
 		// Allocate several IPs to test cleanup
 		for i := 0; i < 10; i++ {
 			ip, err := allocator.AllocateIP()
@@ -146,23 +146,23 @@ func TestIPAllocatorEdgeCases(t *testing.T) {
 			}
 			allocatedIPs = append(allocatedIPs, ip)
 		}
-		
+
 		if len(allocatedIPs) == 0 {
 			t.Fatal("No IPs could be allocated from subnet")
 		}
-		
+
 		t.Logf("Allocated %d IPs", len(allocatedIPs))
-		
+
 		// Release all allocated IPs
 		for _, ip := range allocatedIPs {
 			allocator.ReleaseIP(ip)
 		}
-		
+
 		// Verify clean state
 		if count := allocator.GetAllocatedCount(); count != 0 {
 			t.Errorf("Expected 0 allocations after cleanup, got %d", count)
 		}
-		
+
 		// Verify we can allocate again after cleanup
 		ip, err := allocator.AllocateIP()
 		if err != nil {
@@ -178,15 +178,15 @@ func TestIPAllocatorEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to parse subnet: %v", err)
 		}
 		allocator := NewIPAllocator(subnet)
-		
+
 		// Allocate IP and assign to VM
 		ip, err := allocator.AllocateIP()
 		if err != nil {
 			t.Fatalf("Failed to allocate IP: %v", err)
 		}
-		
+
 		allocator.AssignIPToVM("test-vm", ip)
-		
+
 		// Verify assignment works
 		assignedIP, exists := allocator.GetVMIP("test-vm")
 		if !exists {
@@ -194,7 +194,7 @@ func TestIPAllocatorEdgeCases(t *testing.T) {
 		} else if !assignedIP.Equal(ip) {
 			t.Errorf("Wrong IP assigned: got %s, expected %s", assignedIP.String(), ip.String())
 		}
-		
+
 		// Verify reverse lookup
 		vmID, exists := allocator.GetIPVM(ip)
 		if !exists {
@@ -202,16 +202,16 @@ func TestIPAllocatorEdgeCases(t *testing.T) {
 		} else if vmID != "test-vm" {
 			t.Errorf("Wrong VM ID in reverse lookup: got %s, expected test-vm", vmID)
 		}
-		
+
 		// Cleanup
 		allocator.ReleaseIP(ip)
-		
+
 		// Verify assignments are cleaned up
 		_, exists = allocator.GetVMIP("test-vm")
 		if exists {
 			t.Error("VM assignment not cleaned up after IP release")
 		}
-		
+
 		// Verify clean state
 		if count := allocator.GetAllocatedCount(); count != 0 {
 			t.Errorf("Expected 0 allocations after cleanup, got %d", count)

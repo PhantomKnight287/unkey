@@ -117,7 +117,7 @@ func (n *VMNetwork) KernelCmdlineArgs() string {
 
 	// Calculate the actual host-side veth IP for this /29 subnet
 	// The host veth gets the first IP in the VM's /29 subnet range
-	tapIP := n.calculateVethHostIP()
+	tapIP := calculateVethHostIP(n.IPAddress)
 
 	// Convert netmask to dotted decimal format
 	netmaskStr := n.formatNetmask()
@@ -133,31 +133,6 @@ func (n *VMNetwork) KernelCmdlineArgs() string {
 		netmaskStr,
 		guestInterface,
 	)
-}
-
-// calculateVethHostIP calculates the host-side veth IP for the VM's /29 subnet
-// AIDEV-NOTE: CRITICAL FIX - Must match actual network implementation (VM IP - 1)
-func (n *VMNetwork) calculateVethHostIP() string {
-	if n.IPAddress == nil {
-		return ""
-	}
-
-	ip := n.IPAddress.To4()
-	if ip == nil {
-		return ""
-	}
-
-	// For point-to-point veth configuration, host veth gets VM IP - 1
-	// This matches the actual implementation in setupVMNetworking()
-	// Example: VM at 172.16.2.186/29 -> Host veth at 172.16.2.185/29
-	// Example: VM at 172.16.2.185/29 -> Host veth at 172.16.2.184/29
-
-	// Host veth gets VM IP - 1 (matches setupVMNetworking implementation)
-	vethIP := make(net.IP, 4)
-	copy(vethIP, ip)
-	vethIP[3] = ip[3] - 1
-
-	return vethIP.String()
 }
 
 // formatNetmask converts the netmask to dotted decimal format
