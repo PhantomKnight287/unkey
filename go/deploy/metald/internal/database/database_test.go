@@ -217,7 +217,7 @@ func TestDatabase_DirectoryPermissions(t *testing.T) {
 
 	// Check permissions (0700)
 	mode := info.Mode()
-	expectedMode := os.FileMode(0700)
+	expectedMode := os.FileMode(0o700)
 	assert.Equal(t, expectedMode, mode&os.ModePerm)
 }
 

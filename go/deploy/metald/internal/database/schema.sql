@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS vms (
     customer_id TEXT NOT NULL,
     config BLOB NOT NULL,
     state INTEGER NOT NULL DEFAULT 0,
+    port_mappings TEXT,
     process_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -32,7 +32,7 @@ func New(dataDir string) (*Database, error) {
 // NewWithLogger creates a new database connection with a custom logger
 func NewWithLogger(dataDir string, logger *slog.Logger) (*Database, error) {
 	// Ensure data directory exists with secure permissions
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
@@ -90,43 +90,7 @@ func (d *Database) migrate() error {
 		return fmt.Errorf("failed to apply schema: %w", err)
 	}
 
-	// Apply additional migrations for port mappings
-	if err := d.migratePortMappings(); err != nil {
-		span.RecordError(err)
-		d.logger.Error("failed to migrate port mappings",
-			slog.String("error", err.Error()),
-		)
-		return fmt.Errorf("failed to migrate port mappings: %w", err)
-	}
-
 	d.logger.Debug("database schema applied successfully")
-	return nil
-}
-
-// migratePortMappings adds port_mappings column if it doesn't exist
-func (d *Database) migratePortMappings() error {
-	// Check if port_mappings column exists
-	var columnExists bool
-	err := d.db.QueryRow(`
-		SELECT COUNT(*) > 0 
-		FROM pragma_table_info('vms') 
-		WHERE name = 'port_mappings'
-	`).Scan(&columnExists)
-	if err != nil {
-		return fmt.Errorf("failed to check for port_mappings column: %w", err)
-	}
-
-	if !columnExists {
-		d.logger.Info("adding port_mappings column to vms table")
-		_, err := d.db.Exec("ALTER TABLE vms ADD COLUMN port_mappings TEXT DEFAULT '[]'")
-		if err != nil {
-			return fmt.Errorf("failed to add port_mappings column: %w", err)
-		}
-		d.logger.Info("port_mappings column added successfully")
-	} else {
-		d.logger.Debug("port_mappings column already exists")
-	}
-
 	return nil
 }
 

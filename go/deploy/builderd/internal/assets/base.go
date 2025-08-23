@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func (m *BaseAssetManager) WithMetrics(metrics MetricsRecorder) *BaseAssetManage
 func (m *BaseAssetManager) InitializeBaseAssetsWithRetry(ctx context.Context) error {
 	maxRetries := 8 // ~4-ish minutes total with exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if attempt > 0 {
 			delay := time.Duration(1<<attempt) * time.Second // Exponential backoff
 			m.logger.InfoContext(ctx, "retrying base asset initialization",
@@ -223,6 +224,7 @@ func (m *BaseAssetManager) downloadAsset(ctx context.Context, asset BaseAsset, l
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// TODO: replace with shared configured http client
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download asset: %w", err)
@@ -241,7 +243,6 @@ func (m *BaseAssetManager) downloadAsset(ctx context.Context, asset BaseAsset, l
 	}
 	defer os.Remove(tmpPath)
 
-	// Copy with progress
 	written, err := io.Copy(tmpFile, resp.Body)
 	if err != nil {
 		tmpFile.Close()
@@ -279,9 +280,8 @@ func (m *BaseAssetManager) registerAsset(ctx context.Context, asset BaseAsset, l
 
 	// Prepare labels
 	labels := make(map[string]string)
-	for k, v := range asset.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, asset.Labels)
+
 	labels["created_by"] = "builderd"
 	labels["customer_id"] = "system"
 	labels["tenant_id"] = "system"
@@ -295,7 +295,6 @@ func (m *BaseAssetManager) registerAsset(ctx context.Context, asset BaseAsset, l
 	// Register via assetmanager client
 	assetID, err := m.assetClient.RegisterBuildArtifact(ctx, "base-assets", localPath, asset.Type, labels)
 	if err != nil {
-		// AIDEV-NOTE: Distinguish between "already exists" vs connection/service unavailable errors
 		// Already exists errors are fine, connection errors should cause retry
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate") ||

@@ -21,9 +21,7 @@ import (
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/billing"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/config"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/database"
-	"github.com/unkeyed/unkey/go/deploy/metald/internal/network"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/observability"
-	"github.com/unkeyed/unkey/go/deploy/metald/internal/reconciler"
 	"github.com/unkeyed/unkey/go/deploy/metald/internal/service"
 	healthpkg "github.com/unkeyed/unkey/go/deploy/pkg/health"
 	"github.com/unkeyed/unkey/go/deploy/pkg/observability/interceptors"
@@ -71,30 +69,6 @@ func getVersion() string {
 	return version
 }
 
-// verifyBridgeInfrastructure verifies bridge infrastructure exists and is configured
-// Bridge is managed by metald-bridge.service, not created by metald
-func verifyBridgeInfrastructure(logger *slog.Logger, cfg *config.Config) error {
-	logger.Info("verifying multi-bridge infrastructure",
-		slog.Int("bridge_count", cfg.Network.BridgeCount))
-
-	// AIDEV-NOTE: Multi-bridge only - supports 8 or 32 bridges (no single bridge support)
-	mbm := network.NewMultiBridgeManager(cfg.Network.BridgeCount, "br-tenant", logger)
-
-	// Verify all bridges exist and are properly configured
-	for i := 0; i < cfg.Network.BridgeCount; i++ {
-		bridgeName := fmt.Sprintf("br-tenant-%d", i)
-		expectedIP := fmt.Sprintf("172.16.%d.1/24", i)
-
-		if err := mbm.VerifyBridge(bridgeName, expectedIP); err != nil {
-			return fmt.Errorf("bridge verification failed for %s: %w", bridgeName, err)
-		}
-	}
-
-	logger.Info("multi-bridge infrastructure verified successfully",
-		slog.Int("bridge_count", cfg.Network.BridgeCount))
-	return nil
-}
-
 func main() {
 	// Track application start time for uptime calculations
 	startTime := time.Now()
@@ -120,7 +94,7 @@ func main() {
 	// Initialize structured logger with JSON output
 	//exhaustruct:ignore
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelDebug,
 	}))
 	slog.SetDefault(logger)
 
@@ -228,51 +202,10 @@ func main() {
 		slog.String("data_dir", cfg.Database.DataDir),
 	)
 
-	// Verify bridge infrastructure FIRST, before any VM services
-	// Bridge is managed by metald-bridge.service, not created by metald
-	if err := verifyBridgeInfrastructure(logger, cfg); err != nil {
-		logger.Error("failed to verify bridge infrastructure",
-			slog.String("error", err.Error()),
-			slog.String("bridge", cfg.Network.BridgeName),
-			slog.String("solution", "ensure metald-bridge.service is running and enabled"))
-		os.Exit(1)
-	}
-
 	// Initialize backend based on configuration
 	var backend types.Backend
 	switch cfg.Backend.Type {
 	case types.BackendTypeFirecracker:
-		// Use SDK client v4 with integrated jailer - let SDK handle complete lifecycle
-		// AIDEV-NOTE: SDK manages firecracker process, integrated jailer, and networking
-
-		// AIDEV-NOTE: Multi-bridge network manager - use first bridge for compatibility
-		// TODO: Refactor network manager to natively support multi-bridge
-		logger.Info("creating network manager for multi-bridge setup",
-			slog.Int("bridge_count", cfg.Network.BridgeCount),
-			slog.String("primary_bridge", "br-tenant-0"))
-
-		// Multi-bridge architecture: br-tenant-0 uses 172.16.0.x/24
-		// All bridge IPs calculated dynamically by MultiBridgeManager
-		networkConfig := &network.Config{
-			BridgeName:      "br-tenant-0",
-			BridgeIP:        "172.16.0.1/24", // First bridge
-			VMSubnet:        "172.16.0.0/24", // First bridge subnet
-			EnableIPv6:      cfg.Network.EnableIPv6,
-			DNSServers:      cfg.Network.DNSServersIPv4,
-			EnableRateLimit: cfg.Network.EnableRateLimit,
-			RateLimitMbps:   cfg.Network.RateLimitMbps,
-			PortRangeMin:    32768, // Default
-			PortRangeMax:    65535, // Default
-		}
-
-		networkManager, err := network.NewManager(logger, networkConfig, &cfg.Network)
-		if err != nil {
-			logger.Error("failed to create multi-bridge network manager",
-				slog.String("error", err.Error()),
-			)
-			os.Exit(1)
-		}
-
 		// Base directory for VM data
 		baseDir := "/opt/metald/vms"
 
@@ -297,33 +230,22 @@ func main() {
 			logger.Info("assetmanager disabled, using noop client")
 		}
 
-		// Use SDK v4 with integrated jailer - the only supported backend
-		// AIDEV-NOTE: Re-enable with conservative approach (DNS only, no IP conflicts)
-		enableKernelNetworkConfig := true
-		sdkClient, err := firecracker.NewSDKClientV4(logger, networkManager, assetClient, vmRepo, &cfg.Backend.Jailer, baseDir, enableKernelNetworkConfig)
+		sdkClient, err := firecracker.NewClient(logger, assetClient, vmRepo, &cfg.Backend.Jailer, baseDir)
 		if err != nil {
-			logger.Error("failed to create SDK client v4 with integrated jailer",
+			logger.Error("failed to create firecracker client",
 				slog.String("error", err.Error()),
 			)
 			os.Exit(1)
 		}
 
-		logger.Info("initialized firecracker SDK v4 backend with integrated jailer",
+		logger.Info("initialized firecracker backend",
 			slog.String("firecracker_binary", "/usr/local/bin/firecracker"),
 			slog.Uint64("uid", uint64(cfg.Backend.Jailer.UID)),
 			slog.Uint64("gid", uint64(cfg.Backend.Jailer.GID)),
 			slog.String("chroot_base", cfg.Backend.Jailer.ChrootBaseDir),
 		)
 
-		if err := sdkClient.Initialize(); err != nil {
-			logger.Error("failed to initialize SDK client v4",
-				slog.String("error", err.Error()),
-			)
-			os.Exit(1)
-		}
 		backend = sdkClient
-
-		// Note: Network manager is initialized and managed by SDK v4
 	case types.BackendTypeDocker:
 		// AIDEV-NOTE: Docker backend for development - creates containers instead of VMs
 		logger.Info("initializing Docker backend for development")
@@ -338,11 +260,6 @@ func main() {
 
 		backend = dockerClient
 		logger.Info("Docker backend initialized successfully")
-	case types.BackendTypeCloudHypervisor:
-		logger.Error("CloudHypervisor backend not implemented",
-			slog.String("backend", string(cfg.Backend.Type)),
-		)
-		os.Exit(1)
 	default:
 		logger.Error("unsupported backend type",
 			slog.String("backend", string(cfg.Backend.Type)),
@@ -411,19 +328,6 @@ func main() {
 	// Create VM service
 	vmService := service.NewVMService(backend, logger, metricsCollector, vmMetrics, vmRepo)
 
-	// Initialize VM reconciler to fix stale VM state issues
-	// AIDEV-NOTE: Critical fix for state inconsistency where database shows VMs but no processes exist
-	vmReconciler := reconciler.NewVMReconciler(logger, backend, vmRepo, 5*time.Minute)
-
-	// Start VM reconciler in background
-	reconcilerCtx, cancelReconciler := context.WithCancel(ctx)
-	defer cancelReconciler()
-
-	go vmReconciler.Start(reconcilerCtx)
-	logger.Info("VM reconciler started",
-		slog.Duration("interval", 5*time.Minute),
-	)
-
 	// Create unified health handler
 	healthHandler := healthpkg.Handler("metald", getVersion(), startTime)
 
@@ -435,7 +339,7 @@ func main() {
 		interceptors.WithServiceName("metald"),
 		interceptors.WithLogger(logger),
 		interceptors.WithActiveRequestsMetric(true),
-		interceptors.WithRequestDurationMetric(false), // Match existing behavior
+		interceptors.WithRequestDurationMetric(true), // Match existing behavior
 		interceptors.WithErrorResampling(true),
 		interceptors.WithPanicStackTrace(true),
 		interceptors.WithTenantAuth(true,
@@ -483,13 +387,12 @@ func main() {
 
 	// Configure server with optional TLS and security timeouts
 	server := &http.Server{
-		Addr:    addr,
-		Handler: h2c.NewHandler(httpHandler, &http2.Server{}), //nolint:exhaustruct
-		// AIDEV-NOTE: Security timeouts to prevent slowloris attacks
-		ReadTimeout:    30 * time.Second,  // Time to read request headers
-		WriteTimeout:   30 * time.Second,  // Time to write response
-		IdleTimeout:    120 * time.Second, // Keep-alive timeout
-		MaxHeaderBytes: 1 << 20,           // 1MB max header size
+		Addr:           addr,
+		Handler:        h2c.NewHandler(httpHandler, &http2.Server{}), //nolint:exhaustruct
+		ReadTimeout:    30 * time.Second,                             // Time to read request headers
+		WriteTimeout:   30 * time.Second,                             // Time to write response
+		IdleTimeout:    120 * time.Second,                            // Keep-alive timeout
+		MaxHeaderBytes: 1 << 20,                                      // 1MB max header size
 	}
 
 	// Apply TLS configuration if enabled

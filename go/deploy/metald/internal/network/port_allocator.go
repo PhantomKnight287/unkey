@@ -7,15 +7,12 @@ import (
 	"sync"
 )
 
-// AIDEV-NOTE: Port allocator manages host port allocation for container port mapping
-// This prevents port conflicts between VMs and provides dynamic port allocation
-
-// PortMapping represents a mapping from container port to host port
+// PortMapping represents a mapping from VM port to host port
 type PortMapping struct {
-	ContainerPort int    `json:"container_port"`
-	HostPort      int    `json:"host_port"`
-	Protocol      string `json:"protocol"` // tcp or udp
-	VMID          string `json:"vm_id"`
+	VMPort   int    `json:"vm_port"`
+	HostPort int    `json:"host_port"`
+	Protocol string `json:"protocol"` // tcp or udp
+	VMID     string `json:"vm_id"`
 }
 
 // PortAllocator manages host port allocation for VMs
@@ -115,12 +112,12 @@ func (p *PortAllocator) AllocateSpecificPort(vmID string, hostPort, containerPor
 }
 
 // doAllocatePort performs the actual port allocation (internal helper)
-func (p *PortAllocator) doAllocatePort(vmID string, hostPort, containerPort int, protocol string) (int, error) {
+func (p *PortAllocator) doAllocatePort(vmID string, hostPort, vmPort int, protocol string) (int, error) {
 	// Check for conflicting mapping for same VM
 	if mappings, exists := p.vmPorts[vmID]; exists {
 		for _, mapping := range mappings {
-			if mapping.ContainerPort == containerPort && mapping.Protocol == protocol {
-				return 0, fmt.Errorf("VM %s already has mapping for %s:%d", vmID, protocol, containerPort)
+			if mapping.VMPort == vmPort && mapping.Protocol == protocol {
+				return 0, fmt.Errorf("VM %s already has mapping for %s:%d", vmID, protocol, vmPort)
 			}
 		}
 	}
@@ -131,10 +128,10 @@ func (p *PortAllocator) doAllocatePort(vmID string, hostPort, containerPort int,
 
 	// Create mapping
 	mapping := PortMapping{
-		ContainerPort: containerPort,
-		HostPort:      hostPort,
-		Protocol:      protocol,
-		VMID:          vmID,
+		VMPort:   vmPort,
+		HostPort: hostPort,
+		Protocol: protocol,
+		VMID:     vmID,
 	}
 
 	// Add to VM's port list

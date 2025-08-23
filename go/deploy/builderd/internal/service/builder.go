@@ -28,17 +28,9 @@ type BuilderService struct {
 	executors    *executor.Registry
 	assetClient  *assetmanager.Client
 
-	// TODO: Add these when implemented
-	// db           *database.DB
-	// storage      storage.Backend
-	// docker       *docker.Client
-	// tenantMgr    *tenant.Manager
-
-	// AIDEV-NOTE: Temporary in-memory storage for build jobs until database is implemented
 	builds      map[string]*builderv1.BuildJob
 	buildsMutex sync.RWMutex
 
-	// AIDEV-NOTE: Shutdown coordination to prevent races
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	buildWg        sync.WaitGroup
@@ -54,7 +46,6 @@ func NewBuilderService(
 	// Create executor registry
 	executors := executor.NewRegistry(logger, cfg, buildMetrics)
 
-	// AIDEV-NOTE: Create shutdown context for coordinated service shutdown
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 
 	return &BuilderService{

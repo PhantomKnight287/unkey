@@ -1,10 +1,51 @@
 package network
 
 import (
-	"fmt"
+	"log/slog"
 	"net"
+	"sync"
 	"time"
 )
+
+// BridgeManager manages workspace allocation across multiple bridges
+type BridgeManager struct {
+	bridgeCount  int                             // 8 or 32 bridges
+	bridgePrefix string                          // "br-vms" -> br-vms-0, br-vms-1, etc.
+	workspaces   map[string]*WorkspaceAllocation // workspace_id -> allocation
+	bridgeUsage  map[int]map[string]bool         // bridge_num -> workspace_id -> exists
+	mu           sync.RWMutex
+	statePath    string       // Path to state persistence file
+	logger       *slog.Logger // Structured logger for state operations
+}
+
+// BridgeState represents the serializable state for persistence
+type BridgeState struct {
+	Workspaces  map[string]*WorkspaceAllocation `json:"workspaces"`
+	BridgeUsage map[int]map[string]bool         `json:"bridge_usage"`
+	LastSaved   time.Time                       `json:"last_saved"`
+	Checksum    string                          `json:"checksum"` // SHA256 checksum for integrity validation
+}
+
+type MultiBridgeManager struct {
+	bridgeCount    int                             // 8 or 32 bridges
+	bridgePrefix   string                          // "br-vms" -> br-vms-0, br-vms-1, etc.
+	workspaces     map[string]*WorkspaceAllocation // workspace_id -> allocation
+	bridgeUsage    map[int]map[string]bool         // bridge_num -> workspace_id -> exists
+	mu             sync.RWMutex
+	vlanRangeStart int          // Starting VLAN ID (100)
+	vlanRangeEnd   int          // Ending VLAN ID (4000)
+	statePath      string       // Path to state persistence file
+	logger         *slog.Logger // Structured logger for state operations
+}
+
+// WorkspaceAllocation represents a workspace's network allocation
+type WorkspaceAllocation struct {
+	WorkspaceID  string `json:"workspace_id"`
+	BridgeNumber int    `json:"bridge_number"` // 0-31
+	BridgeName   string `json:"bridge_name"`   // br-vms-N
+	CreatedAt    string `json:"created_at"`
+	VMCount      int    `json:"vm_count"` // Track VM count for IP allocation
+}
 
 // VMNetwork contains network configuration for a VM
 type VMNetwork struct {
@@ -20,8 +61,7 @@ type VMNetwork struct {
 	DNSServers  []string   `json:"dns_servers"`
 	CreatedAt   time.Time  `json:"created_at"`
 
-	// Optional fields for advanced configurations
-	VLANID      int     `json:"vlan_id,omitempty"`
+	// Optional fields for advanced configuration
 	IPv6Address net.IP  `json:"ipv6_address,omitempty"`
 	Routes      []Route `json:"routes,omitempty"`
 }
@@ -64,108 +104,4 @@ type FirewallRule struct {
 	Destination string `json:"destination,omitempty"` // CIDR or "any"
 	Action      string `json:"action"`                // "allow" or "deny"
 	Priority    int    `json:"priority"`              // Lower number = higher priority
-}
-
-// GenerateCloudInitNetwork generates cloud-init network configuration
-func (n *VMNetwork) GenerateCloudInitNetwork() map[string]interface{} {
-	// Generate network configuration for cloud-init
-	config := map[string]interface{}{
-		"version": 2,
-		"ethernets": map[string]interface{}{
-			"eth0": map[string]interface{}{
-				"match": map[string]interface{}{
-					"macaddress": n.MacAddress,
-				},
-				"addresses": []string{
-					n.IPAddress.String() + "/24",
-				},
-				"gateway4": n.Gateway.String(),
-				"nameservers": map[string]interface{}{
-					"addresses": n.DNSServers,
-				},
-			},
-		},
-	}
-
-	return config
-}
-
-// GenerateNetworkMetadata generates metadata for the VM
-func (n *VMNetwork) GenerateNetworkMetadata() map[string]string {
-	metadata := map[string]string{
-		"local-ipv4":      n.IPAddress.String(),
-		"mac":             n.MacAddress,
-		"gateway":         n.Gateway.String(),
-		"netmask":         n.Netmask.String(),
-		"dns-nameservers": n.DNSServers[0],
-	}
-
-	if len(n.DNSServers) > 1 {
-		metadata["dns-nameservers-secondary"] = n.DNSServers[1]
-	}
-
-	return metadata
-}
-
-// KernelCmdlineArgs returns kernel command line arguments for network configuration
-// AIDEV-NOTE: Updated to use correct Firecracker format: ip=G::T:GM::GI:off
-// where G=guest IP, T=TAP IP, GM=guest mask, GI=guest interface
-func (n *VMNetwork) KernelCmdlineArgs() string {
-	if n.IPAddress == nil {
-		return ""
-	}
-
-	// Calculate the actual host-side veth IP for this /29 subnet
-	// The host veth gets the first IP in the VM's /29 subnet range
-	tapIP := calculateVethHostIP(n.IPAddress)
-
-	// Convert netmask to dotted decimal format
-	netmaskStr := n.formatNetmask()
-
-	// Guest interface name (typically eth0 for the first interface)
-	guestInterface := "eth0"
-
-	// Format: ip=G::T:GM::GI:off
-	// G = Guest IP, T = TAP IP, GM = Guest Mask, GI = Guest Interface
-	return fmt.Sprintf("ip=%s::%s:%s:%s:off",
-		n.IPAddress.String(),
-		tapIP,
-		netmaskStr,
-		guestInterface,
-	)
-}
-
-// formatNetmask converts the netmask to dotted decimal format
-func (n *VMNetwork) formatNetmask() string {
-	if n.Netmask == nil {
-		// Default to /24 if no netmask specified
-		return "255.255.255.0"
-	}
-
-	// Handle net.IPMask directly
-	if len(n.Netmask) == 4 {
-		// IPv4 netmask - convert directly to dotted decimal
-		return fmt.Sprintf("%d.%d.%d.%d",
-			n.Netmask[0], n.Netmask[1], n.Netmask[2], n.Netmask[3])
-	}
-
-	// Handle IPv6-style netmask (16 bytes) - extract IPv4 part
-	if len(n.Netmask) == 16 {
-		// IPv4-mapped in IPv6 format, take last 4 bytes
-		return fmt.Sprintf("%d.%d.%d.%d",
-			n.Netmask[12], n.Netmask[13], n.Netmask[14], n.Netmask[15])
-	}
-
-	// Try converting to net.IP as fallback
-	mask := net.IP(n.Netmask)
-	if mask != nil {
-		maskStr := mask.String()
-		// Validate it looks like a dotted decimal IP
-		if len(maskStr) > 0 && maskStr != "<nil>" {
-			return maskStr
-		}
-	}
-
-	// Final fallback
-	return "255.255.255.0"
 }

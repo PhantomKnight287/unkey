@@ -33,7 +33,7 @@ type Config struct {
 	// Network configuration
 	Network NetworkConfig
 
-	// TLS configuration (optional, defaults to disabled)
+	// TLS configuration
 	TLS *TLSConfig
 }
 
@@ -48,10 +48,10 @@ type ServerConfig struct {
 
 // BackendConfig holds backend-specific configuration
 type BackendConfig struct {
-	// Type of backend (firecracker only for now)
+	// Type of backend
 	Type types.BackendType
 
-	// Jailer configuration (required for production)
+	// Jailer configuration
 	Jailer JailerConfig
 }
 
@@ -193,9 +193,6 @@ func LoadConfigWithSocketPath(socketPath string) (*Config, error) {
 
 // LoadConfigWithSocketPathAndLogger loads configuration with optional socket path override and custom logger
 func LoadConfigWithSocketPathAndLogger(socketPath string, logger *slog.Logger) (*Config, error) {
-	// AIDEV-NOTE: Socket endpoints are now managed by process manager
-	// No need for endpoint configuration
-
 	// Parse sampling rate
 	samplingRate := 1.0
 	if samplingStr := os.Getenv("UNKEY_METALD_OTEL_SAMPLING_RATE"); samplingStr != "" {

@@ -53,8 +53,13 @@ func (d *DockerExecutor) ExtractDockerImageWithID(ctx context.Context, request *
 
 	// Get tenant context for logging and metrics
 	tenantID := "unknown"
+	projectID := "unknown"
+	environmentID := "unknown"
 	if auth, ok := interceptors.TenantFromContext(ctx); ok {
 		tenantID = auth.TenantID
+		projectID = auth.ProjectID
+		environmentID = auth.EnvironmentID
+
 	}
 
 	logger := d.logger.With(

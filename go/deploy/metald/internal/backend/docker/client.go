@@ -151,7 +151,6 @@ func NewDockerBackend(logger *slog.Logger, config *DockerBackendConfig) (*Docker
 		vmErrorCounter:  vmErrorCounter,
 	}
 
-
 	return backend, nil
 }
 
@@ -714,7 +713,7 @@ func (d *DockerBackend) createContainer(ctx context.Context, spec *ContainerSpec
 			return "", fmt.Errorf("failed to pull image %s: %w", spec.Image, err)
 		}
 		defer pullResponse.Close()
-		
+
 		// Read the pull response to completion to ensure pull finishes
 		_, err = io.ReadAll(pullResponse)
 		if err != nil {
@@ -761,11 +760,11 @@ func (d *DockerBackend) createContainer(ctx context.Context, spec *ContainerSpec
 	for retry := 0; retry < maxRetries; retry++ {
 		// Clear previous port bindings
 		hostConfig.PortBindings = make(nat.PortMap)
-		
+
 		// Allocate ports for this attempt
 		var allocatedPorts []int
 		portAllocationFailed := false
-		
+
 		for i, mapping := range spec.PortMappings {
 			if mapping.HostPort == 0 {
 				// Allocate a new port
@@ -781,7 +780,7 @@ func (d *DockerBackend) createContainer(ctx context.Context, spec *ContainerSpec
 				spec.PortMappings[i].HostPort = hostPort
 				allocatedPorts = append(allocatedPorts, hostPort)
 			}
-			
+
 			containerPort := nat.Port(fmt.Sprintf("%d/%s", mapping.ContainerPort, mapping.Protocol))
 			hostConfig.PortBindings[containerPort] = []nat.PortBinding{
 				{
@@ -790,7 +789,7 @@ func (d *DockerBackend) createContainer(ctx context.Context, spec *ContainerSpec
 				},
 			}
 		}
-		
+
 		if portAllocationFailed {
 			continue // Try again with new ports
 		}
@@ -937,7 +936,6 @@ func (pa *portAllocator) releasePort(port int, vmID string) {
 		delete(pa.allocated, port)
 	}
 }
-
 
 // Ensure DockerBackend implements Backend interface
 var _ backendtypes.Backend = (*DockerBackend)(nil)

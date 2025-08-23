@@ -150,54 +150,54 @@ message NetworkInterface {
 
   // Additional network options
   map<string, string> options = 5;
-  
+
   // IPv4 configuration (optional)
   IPv4Config ipv4_config = 6;
-  
+
   // IPv6 configuration (optional)
   IPv6Config ipv6_config = 7;
-  
+
   // Network mode
   NetworkMode mode = 8;
-  
+
   // Rate limiting
-  RateLimit rx_rate_limit = 10;  // Receive rate limit
+  RateLimit rx_rate_limit = 10; // Receive rate limit
   RateLimit tx_rate_limit = 11; // Transmit rate limit
 }
 
 // IPv4 network configuration
 message IPv4Config {
-  string address = 1;          // IPv4 address (e.g., "10.100.1.2")
-  string netmask = 2;          // Network mask (e.g., "255.255.255.0")
-  string gateway = 3;          // Default gateway
+  string address = 1;              // IPv4 address (e.g., "10.100.1.2")
+  string netmask = 2;              // Network mask (e.g., "255.255.255.0")
+  string gateway = 3;              // Default gateway
   repeated string dns_servers = 4; // DNS servers
-  bool dhcp = 5;               // Use DHCP instead of static config
+  bool dhcp = 5;                   // Use DHCP instead of static config
 }
 
-// IPv6 network configuration  
+// IPv6 network configuration
 message IPv6Config {
-  string address = 1;          // IPv6 address (e.g., "fd00::1:2")
-  int32 prefix_length = 2;     // Prefix length (e.g., 64)
-  string gateway = 3;          // Default gateway
+  string address = 1;              // IPv6 address (e.g., "fd00::1:2")
+  int32 prefix_length = 2;         // Prefix length (e.g., 64)
+  string gateway = 3;              // Default gateway
   repeated string dns_servers = 4; // DNS servers (IPv6 addresses)
-  bool slaac = 5;              // Use SLAAC (Stateless Address Autoconfiguration)
-  bool privacy_extensions = 6;  // Enable privacy extensions
+  bool slaac = 5; // Use SLAAC (Stateless Address Autoconfiguration)
+  bool privacy_extensions = 6; // Enable privacy extensions
   string link_local = 7;       // Link-local address (auto-generated if empty)
 }
 
 // Network mode for the interface
 enum NetworkMode {
   NETWORK_MODE_UNSPECIFIED = 0;
-  NETWORK_MODE_DUAL_STACK = 1;  // Both IPv4 and IPv6
-  NETWORK_MODE_IPV4_ONLY = 2;   // IPv4 only
-  NETWORK_MODE_IPV6_ONLY = 3;   // IPv6 only
+  NETWORK_MODE_DUAL_STACK = 1; // Both IPv4 and IPv6
+  NETWORK_MODE_IPV4_ONLY = 2;  // IPv4 only
+  NETWORK_MODE_IPV6_ONLY = 3;  // IPv6 only
 }
 
 // Rate limiting configuration
 message RateLimit {
-  int64 bandwidth = 1;    // Bandwidth in bytes/second
-  int64 refill_time = 2;  // Token bucket refill time in milliseconds
-  int64 burst = 3;        // Burst size in bytes
+  int64 bandwidth = 1;   // Bandwidth in bytes/second
+  int64 refill_time = 2; // Token bucket refill time in milliseconds
+  int64 burst = 3;       // Burst size in bytes
 }
 
 message ConsoleConfig {
@@ -222,8 +222,17 @@ message CreateVmRequest {
   // VM configuration
   VmConfig config = 2;
 
-  // Customer identifier for billing and isolation
-  string customer_id = 3;
+  // Customer/tenant identifier for billing and isolation
+  string tenant_id = 3;
+
+  // Project identifier
+  string project_id = 4;
+
+  // Environment identifier
+  string environment_id = 5;
+
+  // user identifier
+  string user_id = 6;
 }
 
 message CreateVmResponse {
@@ -301,16 +310,16 @@ message GetVmInfoResponse {
 
   // Backend-specific information
   map<string, string> backend_info = 5;
-  
+
   // Network information if available
   VmNetworkInfo network_info = 6;
 }
 
 // Port mapping for VM network forwarding
 message PortMapping {
-  int32 container_port = 1;  // Port inside the VM
-  int32 host_port = 2;       // Port on the host system
-  string protocol = 3;       // Protocol (tcp, udp)
+  int32 container_port = 1; // Port inside the VM
+  int32 host_port = 2;      // Port on the host system
+  string protocol = 3;      // Protocol (tcp, udp)
 }
 
 // Network information for a VM
@@ -321,7 +330,7 @@ message VmNetworkInfo {
   string network_namespace = 4;
   string gateway = 5;
   repeated string dns_servers = 6;
-  repeated PortMapping port_mappings = 7;  // Port forwards from host to VM
+  repeated PortMapping port_mappings = 7; // Port forwards from host to VM
 }
 
 message VmMetrics {

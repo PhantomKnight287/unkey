@@ -8,7 +8,6 @@ import (
 )
 
 // Backend defines the interface for hypervisor backends
-// AIDEV-NOTE: This interface abstracts VM operations for all hypervisor types
 type Backend interface {
 	// CreateVM creates a new VM instance with the given configuration
 	CreateVM(ctx context.Context, config *metaldv1.VmConfig) (string, error)
